@@ -131,6 +131,11 @@ int max_connections = 100;
 // config.h
 inline int max_connections = 100; // 完美解决
 
+// 强制内联
+__attribute__((always_inline))
+inline double calculate_pnl(double entry, double exit, int quantity) {
+    return (exit - entry) * quantity;
+}
 ```
 
 **它的神奇之处在于：**
