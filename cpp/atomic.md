@@ -1,6 +1,25 @@
 在 C++ 多线程编程中，`std::atomic` 是实现**无锁编程（Lock-free Programming）**的核心工具。它提供了一种原子化的操作方式，确保多线程访问同一变量时不会出现数据竞态（Data Race），而无需使用重量级的互斥锁（mutex）。
 
----
+---knowledge map:
+```mermaid
+mindmap
+  atomic((mindmap))
+    compare_and_swap
+      eg:lock-free increment 
+    memory_orders
+      relax
+      acquire/release, acq_rel
+        producer/consumer
+      seq_cst 
+    Iinterface
+      load
+      store
+      exchange
+      compare_exchange_weak/strong
+      fetch_add, fetch_sub
+      
+```
+
 
 ## 1. 核心原理
 
