@@ -82,7 +82,8 @@ struct GoodLayout {
 3. **开发建议**：合理的成员排序可以白嫖内存空间。
 
 
-这是一个非常经典的多线程性能陷阱。简单来说，**False Sharing（伪共享）** 就像是两个合租室友虽然各住各的卧室，但因为公用一个大门钥匙，每当一个人想进门，另一个人就得把钥匙交出来，导致效率极低。
+## False Sharing（伪共享）
+就像是两个合租室友虽然各住各的卧室，但因为公用一个大门钥匙，每当一个人想进门，另一个人就得把钥匙交出来，导致效率极低。
 
 ### 为什么会出现 False Sharing？
 
@@ -117,8 +118,7 @@ struct GoodLayout {
 
 ---
 
-好的，既然你对如何检测感兴趣，我们深入聊聊。
-
+# 诊断工具是 `perf`
 伪共享（False Sharing）最阴险的地方在于：**从代码逻辑上看，它是完全正确的，没有任何竞态条件（Race Condition），但性能却会莫名其妙地掉下悬崖。**
 
 在 Linux 环境下，最专业的诊断工具是 `perf`。
@@ -267,119 +267,15 @@ alignas(std::hardware_destructive_interference_size) uint64_t countA;
 
 ```
 
+### 现代 64 位 CPU 存储层次结构延迟对比表 (典型值)
 
-好的，既然你对如何检测感兴趣，我们深入聊聊。
+| 存储层级 (Storage Level) | 访问周期 (Cycles) | 延迟时间 (nanoseconds) | 典型容量 (Per Core) | 共享属性 (Sharing) |
+| :--- | :--- | :--- | :--- | :--- |
+| **寄存器 (Register)** | 1 | **~0.3 ns** | < 1 KB | 核心私有 |
+| **L1 Cache (Data/Inst)** | 4 - 5 | **~1.2 - 1.5 ns** | 32 - 64 KB | 核心私有 |
+| **L2 Cache** | 12 - 14 | **~4.0 - 5.0 ns** | 256 KB - 2 MB | 核心私有 |
+| **L3 Cache (LLC)** | 40 - 60 | **~15 - 20 ns** | 2 - 4 MB | 全局共享 |
+| **主内存 (DDR4/5 RAM)** | 150 - 300 | **~50 - 100 ns** | 16 GB+ | 全局共享 |
+| **NVMe SSD (I/O)** | N/A | **~10,000+ ns** | 512 GB+ | 系统共享 |
 
-伪共享（False Sharing）最阴险的地方在于：**从代码逻辑上看，它是完全正确的，没有任何竞态条件（Race Condition），但性能却会莫名其妙地掉下悬崖。**
-
-在 Linux 环境下，最专业的诊断工具是 `perf`。
-
----
-
-### 1. 使用 `perf c2c` (Cache-to-Cache)
-
-这是专门为检测缓存行共享而设计的命令。它能告诉你哪些内存地址正在导致频繁的缓存跨核心同步。
-
-* **采样数据：**
-```bash
-perf c2c record -g -- ./your_program
-
-```
-
-
-* **查看报告：**
-```bash
-perf c2c report
-
-```
-
-
-在报告中，你需要重点观察 **"Shared Data Cache Line Table"**。如果某个 Offset 的 `Remote HITM`（Remote Hit In Modified Cache）数值很高，那就说明不同的核心在反复争夺同一个 Cache Line 的修改权。
-
----
-
-### 2. 使用 `perf stat` 观察硬件指标
-
-如果你不想看详细的地址分配，只想验证是否存在大量的缓存失效，可以使用：
-
-```bash
-perf stat -e L1-dcache-load-misses,L1-dcache-stores,cache-misses ./your_program
-
-```
-
-* **现象：** 如果你的代码逻辑很简单（比如只是简单的加法），但 `L1-dcache-load-misses` 的比率高得离谱，且 CPU 占用率满负载但吞吐量极低，那基本就是伪共享在作怪。
-
----
-
-### 3. 代码层面的验证：Benchmark 对比
-
-在修复前后，你可以使用 Google Benchmark 等工具进行对比。你会发现，仅仅加上 `alignas(64)`，在多线程高并发写入的场景下，性能提升可能是 **数倍甚至十倍以上**。
-
-#### 为什么 `alignas` 比手动 Padding 更好？
-
-以前程序员习惯手动添加无意义的占位符（比如 `long padding[8];`），但 `alignas` 的优势在于：
-
-* **语义清晰：** 直接告诉编译器和后来的维护者这是为了对齐。
-* **编译器优化：** 手动 Padding 有时会被编译器在优化阶段作为“死代码”剔除，而 `alignas` 是强制性的指令。
-
----
-
-### 避坑指南：不要过度使用
-
-虽然 `alignas(64)` 很好用，但请记住：
-
-1. **只针对高频写入的共享数据：** 如果是只读数据，多个核心共享同一个 Cache Line 没有任何问题（状态为 Shared），反而能节省缓存空间。
-2. **内存膨胀：** 如果你有一个包含 100 万个元素的结构体数组，给每个元素都加 `alignas(64)`，内存消耗会从几个 MB 飙升到 64MB 以上。
-
-
-在高性能场景中，比如实现一个**无锁队列（Lock-Free Queue）**，伪共享（False Sharing）几乎是性能的“头号杀手”。
-
-无锁队列通常有两个核心指针：`head`（出队）和 `tail`（入队）。
-
-* **生产者线程** 频繁修改 `tail`。
-* **消费者线程** 频繁修改 `head`。
-
-如果这两个指针挨在一起，两个线程就会在同一个 Cache Line 上反复“打架”。
-
----
-
-### 高性能无锁队列的内存布局
-
-下面是一个典型的优化布局方案。我们不仅要给指针加 `alignas`，还要注意它们在内存中的顺序。
-
-```cpp
-#include <atomic>
-#include <new>
-
-// 使用 C++17 标准定义的对齐大小，通常为 64
-#ifdef __cpp_lib_hardware_interference_size
-    using std::hardware_destructive_interference_size;
-#else
-    constexpr std::size_t hardware_destructive_interference_size = 64;
-#endif
-
-struct LfQueue {
-    // 1. 生产者关心的变量，对齐到 Cache Line
-    alignas(hardware_destructive_interference_size) std::atomic<size_t> tail;
-
-    // 2. 消费者关心的变量，对齐到另一个 Cache Line
-    alignas(hardware_destructive_interference_size) std::atomic<size_t> head;
-
-    // 3. 实际存储数据的数组（通常也需要考虑对齐以提升整体访存性能）
-    // ... data ...
-};
-
-```
-
-### 为什么这样做有效？
-
-1. **物理隔离**：`tail` 和 `head` 之间会有至少 56 字节的空隙（Padding）。这意味着生产者在移动 `tail` 时，消费者的 L1 Cache 中关于 `head` 的行保持为 **Shared** 或 **Exclusive** 状态，不会被强制失效。
-2. **流水线效率**：CPU 不需要为了同步一个它根本不用的变量而去触发昂贵的 MESI 协议（缓存一致性协议）状态转换。
-
----
-
-### 进阶技巧：Padding 的艺术
-
-有时候你不仅需要隔离 `head` 和 `tail`，还需要隔离它们与其他成员变量。
-
-> **注意：** 在某些编译器下，仅仅对第一个成员加 `alignas` 是不够的，因为后续的变量可能会紧贴着它。最稳妥的办法是给**每一个**高频修改的原子变量都加上 `alignas`。
+> **注：** 以上纳秒 (ns) 数值基于 3.0GHz - 4.0GHz 左右的现代处理器估算。1ns = $10^{-9}$ 秒。
