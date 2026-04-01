@@ -88,4 +88,34 @@ int main() {
 
 > **注意：** 如果你在非模板函数里使用 `std::forward`，或者没写 `<T>`，它就失去了“条件转换”的作用，甚至无法编译。
 
-您是否想看一个在实际开发中（例如实现智能指针或工厂模式）使用完美转发的具体案例？
+```cpp
+#include <iostream>
+#include <utility> // Required for std::forward
+
+void targetFunction(int& x) {
+    std::cout << "Lvalue reference version called\n";
+}
+
+void targetFunction(int&& x) {
+    move(x) ...
+    std::cout << "Rvalue reference version called\n";
+}
+
+// The Wrapper using Perfect Forwarding
+template <typename T>
+void wrapper(T&& arg) {
+    // std::forward restores the "rvalue-ness" if arg was an rvalue
+    targetFunction(std::forward<T>(arg));
+}
+
+int main() {
+    std::string a = "abc";
+
+    std::cout << "Passing 'a' (lvalue):\n";
+    wrapper(a); // Calls the lvalue version
+
+    std::cout << "\nPassing '20' (rvalue):\n";
+    wrapper("abcd"); // Calls the rvalue version
+}
+```
+
