@@ -37,8 +37,8 @@ struct Arena {
     Arena& operator=(const Arena&) = delete;
 
     void* allocate(size_t n) {
-        if (static_cast<size_t>(buffer + N - ptr) >= n) {
-            void* res = ptr;
+        if (static_cast<size_t>(N - (ptr - buffer)) >= n) {
+            void* res = ptr;// start for the free space
             ptr += n;
             return res;
         }
